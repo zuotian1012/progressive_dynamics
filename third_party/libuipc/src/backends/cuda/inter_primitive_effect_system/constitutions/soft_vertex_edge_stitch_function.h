@@ -1,0 +1,10 @@
+#pragma once
+#include <cuda_tool/cuda_tool.h>
+
+namespace uipc::backend::cuda
+{
+namespace sym::soft_vertex_edge_stitch
+{
+#include "details/soft_vertex_edge_stitch.inl"
+}
+}  // namespace uipc::backend::cuda

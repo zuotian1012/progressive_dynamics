@@ -1,0 +1,43 @@
+# Local environments and generated results
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+output/
+outputs/
+tmp/
+external/
+build/
+dist/
+*.egg-info/
+# Local research PDFs and downloaded dependencies
+papers/
+/native/libuipc/downloads/
+/native/libuipc/build_provenance.json
+/native/libuipc/upstream_tree.json
+# Native binaries; OBJ meshes outside native/ must remain versioned
+*.exe
+*.dll
+*.lib
+*.pdb
+*.exp
+*.ilk
+*.o
+*.so
+*.a
+/native/**/*.obj
+# Machine settings and credentials
+.polyscope.ini
+imgui.ini
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+.DS_Store
+Thumbs.db
+
+# Additional native build artifacts
+*.pyd
+.xmake/

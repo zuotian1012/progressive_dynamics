@@ -1,0 +1,32 @@
+{
+  "date": "2026-11-26",
+  "environment": "Existing workspace Python 3.11 environment reused read-only; cwd is release directory. No fresh dependency installation or CUDA validation. CPU threads limited to 1.",
+  "checks": [
+    {
+      "command": "python -m unittest discover -s tests -p test_cloth.py -v",
+      "exit_code": 0,
+      "seconds": 0.539,
+      "stdout": "velpro: level 0, 9 vertices, 0/20 solver warnings\n",
+      "stderr": "test_all_stencils_preserve_affine_constant_velocity (test_cloth.ClothTests.test_all_stencils_preserve_affine_constant_velocity) ... ok\ntest_barrier_gradient (test_cloth.ClothTests.test_barrier_gradient) ... ok\ntest_bending_gradient (test_cloth.ClothTests.test_bending_gradient) ... ok\ntest_hierarchy_and_proxy_gradient (test_cloth.ClothTests.test_hierarchy_and_proxy_gradient) ... ok\ntest_membrane_gradient (test_cloth.ClothTests.test_membrane_gradient) ... ok\ntest_pins_and_plane_contact (test_cloth.ClothTests.test_pins_and_plane_contact) ... ok\ntest_rest_and_rigid_motion (test_cloth.ClothTests.test_rest_and_rigid_motion) ... ok\ntest_rotation_covariance_and_force_balance (test_cloth.ClothTests.test_rotation_covariance_and_force_balance) ... ok\ntest_single_step_free_fall (test_cloth.ClothTests.test_single_step_free_fall) ... ok\ntest_vertical_flag_rest_and_spatial_forcing_gradient (test_cloth.ClothTests.test_vertical_flag_rest_and_spatial_forcing_gradient) ... ok\n\n----------------------------------------------------------------------\nRan 10 tests in 0.172s\n\nOK\n"
+    },
+    {
+      "command": "python -m unittest discover -s tests -p test_shirt_event_policy.py -v",
+      "exit_code": 0,
+      "seconds": 0.084,
+      "stdout": "",
+      "stderr": "test_old_or_mixed_parent_rejected (test_shirt_event_policy.EventPolicyTest.test_old_or_mixed_parent_rejected) ... ok\ntest_rejects_unconverged_and_conflicting_native_status (test_shirt_event_policy.EventPolicyTest.test_rejects_unconverged_and_conflicting_native_status) ... ok\ntest_tolerances_and_semi_implicit (test_shirt_event_policy.EventPolicyTest.test_tolerances_and_semi_implicit) ... ok\n\n----------------------------------------------------------------------\nRan 3 tests in 0.000s\n\nOK\n"
+    },
+    {
+      "command": "python -m cloth --config configs/release_smoke.json --output output/release_smoke --methods velpro --no-gif",
+      "exit_code": 0,
+      "seconds": 1.088,
+      "stdout": "velpro: level 0, 9 vertices, 0/3 solver warnings\nvelpro: level 1, 25 vertices, 0/3 solver warnings\n{\n  \"scene\": \"release_smoke\",\n  \"duration_s\": 0.06,\n  \"vertices_per_level\": [\n    9,\n    25\n  ],\n  \"methods\": {\n    \"velpro\": {\n      \"solver_warnings\": 0,\n      \"max_gradient_inf\": 4.255941450171177e-06,\n      \"all_level_step_seconds\": 0.052610499784350395,\n      \"minimum_floor_clearance_m\": 1.0777353046724725,\n      \"max_pin_error_m\": 0.0,\n      \"peak_continuity_rms_m\": 0.00041717273150942237,\n      \"peak_consistency_rms_m\": 0.0015862758383591007,\n      \"peak_fine_detail_rms_m\": 0.001611738681528587,\n      \"max_principal_stretch\": 1.0035855054238927,\n      \"peak_speed_m_s\": 0.551171625564127\n    }\n  },\n  \"notes\": [\n    \"Each method's timing includes the same cached coarse trajectory once; not a benchmark speedup.\",\n    \"RMS metrics divide by total included mass; compare with paper norms using the documented scaling.\",\n    \"Printed squared normalization gives independent baseline 1/4; near-zero denominator entries are null.\",\n    \"Independent baseline uses the shared finest-mesh proxy energy, not separate per-level materials.\"\n  ]\n}\n",
+      "stderr": ""
+    }
+  ],
+  "snapshot_check": {
+    "files": 470,
+    "mismatches": []
+  },
+  "gpu_validation": "not_run"
+}

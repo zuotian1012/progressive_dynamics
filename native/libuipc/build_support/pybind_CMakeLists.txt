@@ -1,0 +1,7 @@
+# Use the same pinned local headers as the isolated XMake build.
+set(PYBIND11_FINDPYTHON ON)
+set(Python_EXECUTABLE "${UIPC_PYTHON_EXECUTABLE_PATH}")
+set(Python3_EXECUTABLE "${UIPC_PYTHON_EXECUTABLE_PATH}")
+find_package(Python COMPONENTS Interpreter Development.Module REQUIRED)
+add_subdirectory("${PROJECT_SOURCE_DIR}/vendor/pybind11" "${PROJECT_BINARY_DIR}/pybind11")
+add_subdirectory(pyuipc)

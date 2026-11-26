@@ -1,0 +1,9 @@
+# Native Windows prototype; separate from the original Linux Genesis 0.0.25 stack.
+numpy==2.2.6
+scipy==1.14.1
+matplotlib==3.9.2
+Pillow==12.3.0
+trimesh==5.1.0
+polyscope==2.6.1
+fast-simplification==0.2.0
+pyuipc==0.0.28

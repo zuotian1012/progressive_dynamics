@@ -1,0 +1,4 @@
+-r requirements.txt
+ipctk==1.6.1
+trimesh==5.1.0
+threadpoolctl==3.6.0

@@ -1,0 +1,42 @@
+{
+  "environment": "Fresh release .venv installed from requirements-progressive.txt; no old experiment inputs",
+  "python": "3.11.8 (tags/v3.11.8:db85d51, Feb  6 2024, 22:03:32) [MSC v.1937 64 bit (AMD64)]",
+  "checks": [
+    {
+      "suite": "test_cloth.py",
+      "exit_code": 0,
+      "seconds": 0.629,
+      "stdout": "velpro: level 0, 9 vertices, 0/20 solver warnings\n",
+      "stderr": "test_all_stencils_preserve_affine_constant_velocity (test_cloth.ClothTests.test_all_stencils_preserve_affine_constant_velocity) ... ok\ntest_barrier_gradient (test_cloth.ClothTests.test_barrier_gradient) ... ok\ntest_bending_gradient (test_cloth.ClothTests.test_bending_gradient) ... ok\ntest_hierarchy_and_proxy_gradient (test_cloth.ClothTests.test_hierarchy_and_proxy_gradient) ... ok\ntest_membrane_gradient (test_cloth.ClothTests.test_membrane_gradient) ... ok\ntest_pins_and_plane_contact (test_cloth.ClothTests.test_pins_and_plane_contact) ... ok\ntest_rest_and_rigid_motion (test_cloth.ClothTests.test_rest_and_rigid_motion) ... ok\ntest_rotation_covariance_and_force_balance (test_cloth.ClothTests.test_rotation_covariance_and_force_balance) ... ok\ntest_single_step_free_fall (test_cloth.ClothTests.test_single_step_free_fall) ... ok\ntest_vertical_flag_rest_and_spatial_forcing_gradient (test_cloth.ClothTests.test_vertical_flag_rest_and_spatial_forcing_gradient) ... ok\n\n----------------------------------------------------------------------\nRan 10 tests in 0.138s\n\nOK\n"
+    },
+    {
+      "suite": "test_progressive.py",
+      "exit_code": 0,
+      "seconds": 0.812,
+      "stdout": "",
+      "stderr": "test_3d_shell_gradient_and_hessian (test_progressive.ProgressiveTests.test_3d_shell_gradient_and_hessian) ... ok\ntest_affine_body_gradients_and_no_cloth_targets (test_progressive.ProgressiveTests.test_affine_body_gradients_and_no_cloth_targets) ... ok\ntest_analytic_strain_hessian_near_limit (test_progressive.ProgressiveTests.test_analytic_strain_hessian_near_limit) ... ok\ntest_collision_hessian_and_affine_restriction (test_progressive.ProgressiveTests.test_collision_hessian_and_affine_restriction) ... ok\ntest_failed_newton_is_marked_unconverged (test_progressive.ProgressiveTests.test_failed_newton_is_marked_unconverged) ... ok\ntest_frozen_nonlinear_proxy_gradient (test_progressive.ProgressiveTests.test_frozen_nonlinear_proxy_gradient) ... ok\ntest_integrators_constant_velocity_and_nonlinear_offsets (test_progressive.ProgressiveTests.test_integrators_constant_velocity_and_nonlinear_offsets) ... ok\ntest_ipc_ccd_friction_and_derivatives (test_progressive.ProgressiveTests.test_ipc_ccd_friction_and_derivatives) ... ok\ntest_newton_free_fall_and_consistency_closed_form (test_progressive.ProgressiveTests.test_newton_free_fall_and_consistency_closed_form) ... ok\ntest_nonlinear_offset_is_not_added_to_velocity (test_progressive.ProgressiveTests.test_nonlinear_offset_is_not_added_to_velocity) ... ok\ntest_nonlinear_psq_search_decreases_actual_energy (test_progressive.ProgressiveTests.test_nonlinear_psq_search_decreases_actual_energy) ... ok\ntest_preview_stop_is_not_newton_convergence (test_progressive.ProgressiveTests.test_preview_stop_is_not_newton_convergence) ... ok\ntest_psq_rest_rigid_and_tangent_rotation (test_progressive.ProgressiveTests.test_psq_rest_rigid_and_tangent_rotation) ... ok\ntest_psq_velocity_is_position_directional_derivative (test_progressive.ProgressiveTests.test_psq_velocity_is_position_directional_derivative) ... ok\ntest_restriction_and_undefined_continuity (test_progressive.ProgressiveTests.test_restriction_and_undefined_continuity) ... ok\ntest_shared_proxy_chain_gradient (test_progressive.ProgressiveTests.test_shared_proxy_chain_gradient) ... ok\ntest_strain_barrier (test_progressive.ProgressiveTests.test_strain_barrier) ... ok\n\n----------------------------------------------------------------------\nRan 17 tests in 0.375s\n\nOK\n"
+    },
+    {
+      "suite": "test_shirt_event_policy.py",
+      "exit_code": 0,
+      "seconds": 0.089,
+      "stdout": "",
+      "stderr": "test_old_or_mixed_parent_rejected (test_shirt_event_policy.EventPolicyTest.test_old_or_mixed_parent_rejected) ... ok\ntest_rejects_unconverged_and_conflicting_native_status (test_shirt_event_policy.EventPolicyTest.test_rejects_unconverged_and_conflicting_native_status) ... ok\ntest_tolerances_and_semi_implicit (test_shirt_event_policy.EventPolicyTest.test_tolerances_and_semi_implicit) ... ok\n\n----------------------------------------------------------------------\nRan 3 tests in 0.000s\n\nOK\n"
+    },
+    {
+      "suite": "test_release_runtime.py",
+      "exit_code": 0,
+      "seconds": 0.131,
+      "stdout": "",
+      "stderr": "test_adjacent_provenance_and_corruption_rejection (test_release_runtime.ReleaseRuntimeTests.test_adjacent_provenance_and_corruption_rejection) ... ok\ntest_missing_runtime_is_rejected (test_release_runtime.ReleaseRuntimeTests.test_missing_runtime_is_rejected) ... ok\n\n----------------------------------------------------------------------\nRan 2 tests in 0.017s\n\nOK\n"
+    },
+    {
+      "suite": "test_safe_expansion.py",
+      "exit_code": 0,
+      "seconds": 7.769,
+      "stdout": "horizontal: converged=True, iterations=2, seconds=0.012, energy=0.00212395457\nrefined: converged=True, iterations=13, seconds=0.124, energy=0.00212395311\n",
+      "stderr": "test_area_filter_allows_thin_expansion_but_stops_interior_collapse (test_safe_expansion.SafeExpansionTests.test_area_filter_allows_thin_expansion_but_stops_interior_collapse) ... ok\ntest_bad_coarse_contact_and_failed_relaxation_never_accepted (test_safe_expansion.SafeExpansionTests.test_bad_coarse_contact_and_failed_relaxation_never_accepted) ... ok\ntest_exact_arap_hessian_and_variational_strain_correction (test_safe_expansion.SafeExpansionTests.test_exact_arap_hessian_and_variational_strain_correction) ... ok\ntest_expansion_epsilon_is_distinct_and_cannot_weaken_thickness (test_safe_expansion.SafeExpansionTests.test_expansion_epsilon_is_distinct_and_cannot_weaken_thickness) ... ok\ntest_fixed_inherited_edge_infeasibility_is_certified_before_iterations (test_safe_expansion.SafeExpansionTests.test_fixed_inherited_edge_infeasibility_is_certified_before_iterations) ... ok\ntest_history_reconstruction_independence_and_orientation (test_safe_expansion.SafeExpansionTests.test_history_reconstruction_independence_and_orientation) ... ok\ntest_random_fallback_is_seeded_and_failure_is_bounded (test_safe_expansion.SafeExpansionTests.test_random_fallback_is_seeded_and_failure_is_bounded) ... ok\ntest_ratio_ccd_stops_only_limiting_stencils (test_safe_expansion.SafeExpansionTests.test_ratio_ccd_stops_only_limiting_stencils) ... ok\ntest_rest_recovery_through_actual_expansions (test_safe_expansion.SafeExpansionTests.test_rest_recovery_through_actual_expansions) ... ok\ntest_safe_seed_converges_to_same_fine_incremental_solution (test_safe_expansion.SafeExpansionTests.test_safe_seed_converges_to_same_fine_incremental_solution) ... ok\ntest_safe_self_contact_where_direct_prolongation_crosses (test_safe_expansion.SafeExpansionTests.test_safe_self_contact_where_direct_prolongation_crosses) ... ok\ntest_split_endpoints_are_new_even_when_the_parent_slot_is_reused (test_safe_expansion.SafeExpansionTests.test_split_endpoints_are_new_even_when_the_parent_slot_is_reused) ... ok\ntest_vertical_resume_matches_continuous_and_checks_history (test_safe_expansion.SafeExpansionTests.test_vertical_resume_matches_continuous_and_checks_history) ... ok\n\n----------------------------------------------------------------------\nRan 13 tests in 7.316s\n\nOK\n"
+    }
+  ],
+  "gpu_simulation": "not run; no GPU workload started"
+}

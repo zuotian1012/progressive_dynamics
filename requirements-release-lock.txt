@@ -1,0 +1,16 @@
+# Tested Python 3.11 CPU/PSQ environment; CUDA toolchain is separate.
+contourpy==1.3.3
+cycler==0.12.1
+fonttools==4.69.1
+ipctk==1.6.1
+kiwisolver==1.5.1
+matplotlib==3.9.2
+numpy==2.2.6
+packaging==26.4
+pillow==12.3.0
+pyparsing==3.3.3
+python-dateutil==4.0.0
+scipy==1.14.1
+threadpoolctl==3.6.0
+trimesh==5.1.0
+tzdata==2026.6

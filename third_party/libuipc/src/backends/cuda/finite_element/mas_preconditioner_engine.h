@@ -1,0 +1,208 @@
+#pragma once
+#include <type_define.h>
+#include <cuda_tool/cuda_tool.h>
+#include <uipc/common/span.h>
+#include <filesystem>
+#include <string_view>
+
+namespace uipc::backend::cuda
+{
+/**
+ * @brief MAS (MultiLevel Additive Schwarz) preconditioner engine.
+ *
+ * Multi-level domain-decomposition preconditioner from StiffGIPC.
+ * Operates on 3x3 block matrices (BCOO format) and produces z = M^{-1} r.
+ *
+ * Key parameters:
+ * - BANKSIZE = 16: each cluster has at most 16 nodes (48 DOFs).
+ * - Double-precision scaled Cholesky factors and residual/solution buffers.
+ * - Near-singular local operators receive a recorded diagonal shift in normalized
+ *   coordinates. This changes only the preconditioner, never the physical A/b.
+ * - PCG applies triangular solves; explicit inverses exist only in debug exports.
+ */
+class MASPreconditionerEngine
+{
+  public:
+    static constexpr int BANKSIZE          = 16;
+    static constexpr int DEFAULT_BLOCKSIZE = 256;
+    static constexpr int DEFAULT_WARPNUM   = 16;
+    static constexpr int MAX_LEVELS        = 6;
+
+    // Symmetric upper-triangle block count: BANKSIZE*(BANKSIZE+1)/2
+    static constexpr int SYM_BLOCK_COUNT = BANKSIZE * (BANKSIZE + 1) / 2;
+
+    template <typename Scalar>
+    struct alignas(16) ClusterMatrixSymT
+    {
+        Eigen::Matrix<Scalar, 3, 3> M[SYM_BLOCK_COUNT];
+        UIPC_GENERIC                ClusterMatrixSymT()
+        {
+            for(auto& m : M)
+                m.setZero();
+        }
+    };
+
+    struct ClusterFactor { double lower[48 * 48]; double scale[48]; double shift; };
+
+    using ClusterMatrixSym = ClusterMatrixSymT<double>;  // Hessian assembly
+    using ClusterMatrixSymF = ClusterMatrixSymT<double>;  // Debug-only inverse export
+
+    // Level traversal table per node
+    struct LevelTable
+    {
+        int index[MAX_LEVELS];
+    };
+
+    // Host-side level size cache (replaces CUDA int2 to avoid host-side CUDA types)
+    struct Int2
+    {
+        int x = 0;
+        int y = 0;
+    };
+
+    MASPreconditionerEngine()  = default;
+    ~MASPreconditionerEngine() = default;
+
+    // ---- Phase 1: Initialize neighbor structures (called once) ----
+
+    void init_neighbor(int                      vert_num,
+                       int                      total_neighbor_num,
+                       int                      part_map_size,
+                       span<const unsigned int> h_neighbor_list,
+                       span<const unsigned int> h_neighbor_start,
+                       span<const unsigned int> h_neighbor_num,
+                       span<const int>          h_part_to_real,
+                       span<const int>          h_real_to_part);
+
+    // ---- Phase 1b: Allocate matrix-level buffers (called once) ----
+
+    void init_matrix();
+
+    // ---- Phase 2: Assemble preconditioner (per Newton iteration) ----
+
+    void set_preconditioner(cuda_tool::CBufferView<Eigen::Matrix3d> triplet_values,
+                            cuda_tool::CBufferView<int> row_ids,
+                            cuda_tool::CBufferView<int> col_ids,
+                            int                         dof_offset);
+
+    // ---- Phase 3: Apply preconditioning z = M^{-1} r (per PCG iteration) ----
+
+    void apply(cuda_tool::CDenseVectorView<Float> r,
+               cuda_tool::DenseVectorView<Float>  z,
+               cuda_tool::CVarView<IndexT>        converged,
+               cudaStream_t                       stream = nullptr);
+
+    bool is_initialized() const { return m_initialized; }
+
+    /**
+     * @brief Override the number of active levels used during apply().
+     *
+     * By default all m_level_num levels are used (full hierarchy, injection prolongation).
+     * Set to 1 to use only the fine level (block Jacobi with BANKSIZE-node clusters).
+     *
+     * @param n  1 = fine-only (block Jacobi), 0 = use full hierarchy (default).
+     */
+    void set_active_level_num(int n)
+    {
+        if(n <= 0 || n > m_level_num)
+            m_active_level_num = m_level_num;  // clamp: 0 or out-of-range -> full hierarchy
+        else
+            m_active_level_num = n;
+    }
+
+    /**
+     * @brief No-op kept for API compatibility; coarse damping is unused since
+     *        collect_final_Z now uses pure injection prolongation (StiffGIPC default).
+     */
+    void set_coarse_damping(Float /*omega*/) {}
+
+    /** Dump cluster matrices in Matrix Market (.mtx) format and metadata as JSON for debug.
+     *
+     * `output_dir` is interpreted as a filesystem path; the caller may pass any
+     * `std::filesystem::path::string()`-like result. Files written:
+     *   - `mas_cluster_hess.f<frame>.n<newton>.mtx`
+     *   - `mas_cluster_inv.f<frame>.n<newton>.mtx`
+     *   - `mas_cluster_meta.f<frame>.n<newton>.json`
+     */
+    void dump_cluster_matrices_debug(std::string_view output_dir, SizeT frame, SizeT newton_iter);
+
+    // ===========================================================================
+    // All methods below are public because NVCC on Windows requires
+    // extended __device__ lambdas to reside in methods with public access.
+    // ===========================================================================
+
+    // Hierarchy building steps
+    void compute_num_levels(int vert_num);
+    int  reorder_realtime();
+    void build_connect_mask_L0();
+    void prepare_prefix_sum_L0();
+    void build_level1();
+    void build_connect_mask_Lx(int level);
+    void next_level_cluster(int level);
+    void prefix_sum_Lx(int level);
+    void compute_next_level(int level);
+    void aggregation_kernel();
+
+    // Hessian assembly + inversion
+    void scatter_hessian_to_clusters(cuda_tool::CBufferView<Eigen::Matrix3d> triplet_values,
+                                     cuda_tool::CBufferView<int> row_ids,
+                                     cuda_tool::CBufferView<int> col_ids,
+                                     int                         dof_offset);
+    void invert_cluster_matrices();
+
+    // Preconditioning steps
+    void build_multi_level_R(cuda_tool::CDenseVectorView<Float> R,
+                             cuda_tool::CVarView<IndexT>        converged,
+                             cudaStream_t stream = nullptr);
+    void schwarz_local_solve(cuda_tool::CVarView<IndexT> converged,
+                             cudaStream_t                stream = nullptr);
+    void collect_final_Z(cuda_tool::DenseVectorView<Float> Z,
+                         cuda_tool::CVarView<IndexT>       converged,
+                         cudaStream_t                      stream = nullptr);
+
+  private:
+    // ---- State ----
+    bool m_initialized     = false;
+    int  m_total_nodes     = 0;
+    int  m_total_map_nodes = 0;
+    int  m_level_num       = 0;
+    int m_active_level_num = 0;  // levels used during apply(); 0 = use m_level_num
+    int  m_total_num_clusters = 0;
+    Int2 m_h_level_size;
+
+    // ---- GPU buffers: hierarchy ----
+    cuda_tool::DeviceBuffer<Int2>         level_sizes;
+    cuda_tool::DeviceBuffer<int>          coarse_space_tables;
+    cuda_tool::DeviceBuffer<int>          prefix_original;
+    cuda_tool::DeviceBuffer<int>          prefix_sum_original;
+    cuda_tool::DeviceBuffer<int>          going_next;
+    cuda_tool::DeviceBuffer<int>          dense_level;
+    cuda_tool::DeviceBuffer<LevelTable>   coarse_tables;
+    cuda_tool::DeviceBuffer<unsigned int> fine_connect_masks;
+    cuda_tool::DeviceBuffer<unsigned int> next_connect_masks;
+    cuda_tool::DeviceBuffer<unsigned int> next_prefixes;
+    cuda_tool::DeviceBuffer<unsigned int> next_prefix_sums;
+
+    // ---- GPU buffers: neighbor graph ----
+    int                                   m_neighbor_list_size = 0;
+    cuda_tool::DeviceBuffer<unsigned int> neighbor_lists;
+    cuda_tool::DeviceBuffer<unsigned int> neighbor_starts;
+    cuda_tool::DeviceBuffer<unsigned int> neighbor_nums;
+    cuda_tool::DeviceBuffer<unsigned int> neighbor_lists_init;
+    cuda_tool::DeviceBuffer<unsigned int> neighbor_nums_init;
+
+    // ---- GPU buffers: partition mappings ----
+    cuda_tool::DeviceBuffer<int> part_to_real;  // partition-ordered index -> real vertex index
+    cuda_tool::DeviceBuffer<int> real_to_part;  // real vertex index -> partition-ordered index
+
+    // ---- GPU buffers: cluster matrices ----
+    cuda_tool::DeviceBuffer<ClusterMatrixSym> cluster_hessians;  // assembled Hessian blocks (double)
+    cuda_tool::DeviceBuffer<ClusterFactor> cluster_factors;
+    cuda_tool::DeviceVar<int> shifted_count; // normalized diagonal shifts, preconditioner only
+    //  
+
+    // ---- GPU buffers: multi-level residual / solution (double) ----
+    cuda_tool::DeviceBuffer<Eigen::Vector3d> multi_level_R;
+    cuda_tool::DeviceBuffer<double3>          multi_level_Z;
+};
+}  // namespace uipc::backend::cuda

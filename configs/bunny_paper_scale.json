@@ -1,0 +1,52 @@
+{
+  "benchmark": "PD++ Figures 11-12, paper-scale reconstructed bunny experiment",
+  "parameters": {
+    "scene": "bunny",
+    "assets": "output/bunny_paper_assets",
+    "levels": 8,
+    "methods": [
+      "velpro",
+      "full",
+      "semi",
+      "direct"
+    ],
+    "steps": 400,
+    "dt": 0.01,
+    "young": 30000.0,
+    "poisson": 0.3,
+    "density": 200.0,
+    "thickness": 7e-05,
+    "strain_limit": 1.068,
+    "strain_activation": 1.034,
+    "strain_stiffness": 1000.0,
+    "friction": 0.3,
+    "dmin": 7e-05,
+    "dhat": 0.001,
+    "contact_stiffness": 10000.0,
+    "warm_start": "horizontal",
+    "hessian": "coarse",
+    "offset_linesearch": "nonlinear",
+    "convergence_norm": "rms",
+    "tolerance": 0.0001,
+    "max_iterations": 1000,
+    "consistency_weight": 0.0,
+    "threads": 8,
+    "checkpoint_every": 1
+  },
+  "paper_confirmed": [
+    "levels",
+    "dt",
+    "thickness",
+    "strain_limit",
+    "friction"
+  ],
+  "local_assumptions": {
+    "material": "Young modulus, Poisson ratio and density are local placeholders; not recovered author parameters",
+    "contact": "dmin, dhat and contact stiffness are local explicit values, identical across methods",
+    "duration": "4.0 s / 400 steps; declared experimental horizon, not recovered author duration. Completion of steps does not certify sliding off.",
+    "resolution": "Eight intrinsic levels: 1443,2663,4834,8608,15651,28185,50268,90000 vertices; matches paper endpoint scale approximately, not author meshes.",
+    "acceptance": "No tuning per method. Success only certifies this configured run, not paper reproduction.",
+    "solver": "RMS Newton velocity decrement <=1e-4 m/s for every method (tight threshold used for quantitative comparisons in paper Sec.8.2.2); fixed 1000-iteration safety cap. No tolerance relaxation on failure.",
+    "timing": "One serial run per method with 8 IPC/BLAS threads; report wall and physics time separately. No repeated performance claims."
+  }
+}

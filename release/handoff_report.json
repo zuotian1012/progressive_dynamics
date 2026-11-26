@@ -1,0 +1,29 @@
+{
+  "original_snapshot_files_checked": 470,
+  "original_files_changed_since_snapshot": [],
+  "intentionally_updated_release_files": [
+    "native/intrinsic_builder/CMakeLists.txt",
+    "native/intrinsic_builder/README.md",
+    "progressive/prepare_intrinsic.py",
+    "scripts/bunny_runtime.py",
+    "scripts/libuipc_native_runtime.py",
+    "scripts/run_bunny_velpro_chain.py",
+    "shirt_demo/simulate.py"
+  ],
+  "copied_effective_backend_units": 11,
+  "recorded_historical_sources_verified": 34,
+  "fresh_python_environment": true,
+  "cpu_tests_passed": 45,
+  "intrinsic_builder_self_test": true,
+  "regenerated_hierarchy_and_cpu_dynamics": true,
+  "native_operator_export_and_bundle": true,
+  "cuda_build": "complete: full source compilation and linking passed",
+  "cuda_simulation_run": false,
+  "git_autocrlf_byte_preservation_checked": 3673,
+  "compiled_dependency_dll_conflicts": 0,
+  "cuda_runtime_load": "passed in fresh release Python environment",
+  "cuda_dll_sha256": "03515e6da68ec071ff05ff3b4ffecdb089cf6c3ba3755a6f9122ca2f24a32c0e",
+  "shirt_and_bunny_entry_checks": true,
+  "source_delivery_ready": true,
+  "public_upload_done": false
+}

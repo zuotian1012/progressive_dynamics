@@ -1,0 +1,22 @@
+{
+  "finite_element/mas_preconditioner_engine.cu": {
+    "before_sha256": "5780809b0fc89b44386d97d2a5ca2b537228f8e4f44108d674a9c0f06db4893a",
+    "after_sha256": "b3fb2a9d4310c0e1c4a6624704ce88f8e050dd7fb3f6f587317d1bfff747649c",
+    "source": "mas_preconditioner_engine.cu"
+  },
+  "finite_element/mas_preconditioner_engine.h": {
+    "before_sha256": "56daf1270e7f41d776db19a02ae4e6691cfb2d1f430d5d966de4b6787e1b09a6",
+    "after_sha256": "dd89546c8e1b2f42eaccf0b646800c6fc7b3545f4beafd5b4ebee14728613d05",
+    "source": "mas_preconditioner_engine.h"
+  },
+  "linear_system/linear_fused_pcg.cu": {
+    "before_sha256": "15ee6a84324b61cac84fb5805a1e2b3b1e2787c60152e573378ec0942c96fcc4",
+    "after_sha256": "852872e11e43f825e30ebea48cc1bb9698d9420d4bbf44440184cebd3fb95cde",
+    "source": "linear_fused_pcg.cu"
+  },
+  "linear_system/linear_pcg.cu": {
+    "before_sha256": "c15101b97bd7e1c3026c29a11abba4058128da22b5583168563231660a576f72",
+    "after_sha256": "d6022fd210ca1ce25a007e58efed261e25d5eb037b99c282c359dbb83f292aa6",
+    "source": "linear_pcg.cu"
+  }
+}

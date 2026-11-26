@@ -1,0 +1,14 @@
+{
+  "passed": true,
+  "python_package": "build/runtime/src/uipc/__init__.py",
+  "dll_sha256": "03515e6da68ec071ff05ff3b4ffecdb089cf6c3ba3755a6f9122ca2f24a32c0e",
+  "backend_loaded": true,
+  "event_fallback_source_build": true,
+  "gpu_simulation_run": false,
+  "scope": "DLL/ABI/source-provenance check; not numerical validation",
+  "windows_source_build": true,
+  "cuda_toolkit": "12.6",
+  "cuda_arch": "sm_86",
+  "shirt_entry_point_loaded": true,
+  "bunny_entry_point_loaded": true
+}

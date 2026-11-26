@@ -1,0 +1,55 @@
+L3 compensated PCG and bounded diagonal stabilization (2026-11-19)
+
+Current candidate: stabilized/. This is an isolated backend, based on the
+previous repaired MAS implementation. It is not installed into the shared
+libuipc runtime. Earlier capture/, compensated/, and reliable/ directories
+are diagnostic stages, not the final runtime selection.
+
+Build from the repository root, after the cached libuipc CUDA build exists:
+  .venv\Scripts\python.exe scripts/build_shirt_l3_solver.py stabilized
+
+Do not rebuild over a running experiment's runtime. Preserve its DLL and
+source hashes. The build manifest and exact compiler/linker commands are in
+output/shirt_L3_solver_fix_20261119/stabilized_build/.
+
+Full L3 invocation, inputs, hashes and numerical policy are recorded in
+output/shirt_L3_solver_fix_20261119/full_fold/launch.json.
+This starts from rest and uses completed L2 motion as the VelPro input.
+
+Numerical behavior:
+  1. Compensate binary64 matrix-vector products and the p^T A p reduction.
+  2. Recompute the active operator's residual before declaring convergence.
+     If needed, restart PCG from its current iterate, with the original
+     tolerance and total iteration cap. At most eight reliable restarts.
+  3. Start each Newton linear solve with tau=0. On diagnosed PCG failure,
+     retry A_eff = A + tau*diag(A) with tau=1e-18, 1.6e-17, 2.56e-16,
+     4.096e-15, 6.5536e-14. Fail if these bounded retries cannot converge.
+     The diagonal term is evaluated separately in compensated arithmetic.
+     MAS factors remain those of the original assembled matrix.
+  4. Retain original energy line search and strict finest-level acceptance.
+
+Nonzero tau changes the Newton linear approximation. It does not change
+the physical energy, right-hand side, PD P/S/Q, mesh, material, contact,
+friction, gripper targets, or time step. This is not a claim of an unchanged
+linear equation. The residual check is for A_eff, including nonzero tau.
+The frozen candidate's comment "ORIGINAL residual" refers to explicit
+recomputation rather than the recursive PCG residual; it must not be read
+as certification of the unshifted A when tau is nonzero.
+
+Validation evidence (in output/shirt_L3_solver_fix_20261119/):
+  stable_spmv_verification.json: failing matrix/direction, independent
+    80-digit reference, ordinary execution and CUDA Graph replay.
+  stabilization_verification.json: genuine negative curvature is detected
+    at tau=0; shifted products agree with the independent reference.
+  local_validation.json: 80 strict local continuation steps, 547..626.
+    Rebuilt native caches; not equivalent to a full run from rest.
+  full_fold/run/run.json: authoritative full-run completion status.
+
+After full completion:
+  .venv\Scripts\python.exe scripts/audit_shirt_stabilized_run.py output/shirt_L3_solver_fix_20261119/full_fold/run
+  .venv\Scripts\python.exe scripts/report_fresh_l2_fold.py output/shirt_L3_solver_fix_20261119/full_fold/run
+  .venv\Scripts\python.exe scripts/audit_mas_release_fix.py output/shirt_L3_solver_fix_20261119/full_fold/run --reference output/shirt_L2_full_fold_mas_20261119/full_protocol/run --reference-label "L2 repaired MAS" --run-label "L3 repaired solver"
+
+Reported successful-PCG iteration counts exclude failed retries. Physics
+timing includes retry work. Distinguish numerical completion from actual
+grasp, release and final cloth placement when interpreting the result.

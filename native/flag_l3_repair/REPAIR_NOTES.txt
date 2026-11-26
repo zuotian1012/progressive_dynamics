@@ -1,0 +1,30 @@
+Flag L3 and finer: recover unresolved coarse backtracking at the current iterate.
+
+This directory was copied from flag_l2_repair. README.txt describes that baseline.
+Only advance_ipc.cu and psq_preview_stop.inl change its algorithm here.
+
+UIPC_PSQ_UNRESOLVED_RESCUE=1 enables the extension on coarse levels only:
+1. Ordinary line search still evaluates at most 8 trials with the existing caps.
+2. Positive, resolved, consistent three-scale probes still allow a coarse stop.
+3. Otherwise restore x_k, verify its full energy, and recompute the direction
+   using the complete PSQ offset Jacobian gradient. No rejected trial is retained.
+4. The retry uses the ordinary feasibility / CCD / energy checks and 8 trials.
+   Even when its increment meets the Newton tolerance, E_trial <= E_current is
+   required. A failed retry restores x_k and throws; it cannot become a preview.
+5. After a successful retry, ordinary frozen-offset iterations resume. Repeated
+   rescues are allowed, but every retry consumes the existing Newton budget.
+
+The L0 first-iteration non-descent rescue remains. Its bookkeeping is generalized
+from a fixed iteration 1 to a recorded retry iteration. Gradient/Hessian kernels
+are unchanged from the independently checked L0 exact-gradient implementation.
+This is an explicit repair extension, not an unmodified paper algorithm.
+
+The initial L3 attempt exposed unhandled internal line-search failures concealed
+by a later verified preview in the same frame. Old L0/L1/L2 logs contain 25/143/46
+such warnings. Existing results are preserved, but the final continuation is
+rebuilt from L0 with the new DLL and per-iteration acceptance auditing.
+
+Build: scripts/build_flag_l3_fix.py --variant rescue
+Run: scripts/continue_flag_strict.py --output <new-directory>
+Audit: scripts/audit_flag_fine.py, plus existing geometry/non-descent/search audits.
+No shared build/install, shared source, shirt runtime or shirt result is changed.

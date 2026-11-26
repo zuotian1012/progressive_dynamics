@@ -1,0 +1,39 @@
+{
+  "benchmark": "PD++ Figures 11-12, reconstructed debug scene; not the original author assets",
+  "parameters": {
+    "scene": "bunny",
+    "assets": "output/bunny_debug_assets",
+    "levels": 8,
+    "methods": ["velpro", "semi", "full", "direct"],
+    "steps": 80,
+    "dt": 0.01,
+    "young": 30000.0,
+    "poisson": 0.3,
+    "density": 200.0,
+    "thickness": 0.00007,
+    "strain_limit": 1.068,
+    "strain_activation": 1.034,
+    "strain_stiffness": 1000.0,
+    "friction": 0.3,
+    "dmin": 0.00007,
+    "dhat": 0.001,
+    "contact_stiffness": 10000.0,
+    "warm_start": "horizontal",
+    "hessian": "coarse",
+    "offset_linesearch": "nonlinear",
+    "convergence_norm": "rms",
+    "tolerance": 0.001,
+    "max_iterations": 200,
+    "consistency_weight": 0.0,
+    "threads": 1,
+    "checkpoint_every": 10
+  },
+  "paper_confirmed": ["levels", "dt", "thickness", "strain_limit", "friction"],
+  "local_assumptions": {
+    "material": "Young modulus, Poisson ratio and density are local placeholders; not recovered author parameters",
+    "contact": "dmin, dhat and contact stiffness are local explicit values, identical across methods",
+    "duration": "0.8 s is a bounded contact diagnostic, not the full original trajectory",
+    "resolution": "debug-only reduction; not the paper 1.5K to 90K cloth meshes",
+    "acceptance": "No tuning per method. Success only certifies this configured run, not paper reproduction."
+  }
+}

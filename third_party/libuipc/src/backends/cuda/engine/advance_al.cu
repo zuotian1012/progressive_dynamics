@@ -1,0 +1,510 @@
+#include <sim_engine.h>
+#include <uipc/common/range.h>
+#include <global_geometry/global_vertex_manager.h>
+#include <global_geometry/global_simplicial_surface_manager.h>
+#include <dytopo_effect_system/global_dytopo_effect_manager.h>
+#include <contact_system/global_contact_manager.h>
+#include <collision_detection/global_trajectory_filter.h>
+#include <line_search/line_searcher.h>
+#include <linear_system/global_linear_system.h>
+#include <animator/global_animator.h>
+#include <diff_sim/global_diff_sim_manager.h>
+#include <newton_tolerance/newton_tolerance_manager.h>
+#include <time_integrator/time_integrator_manager.h>
+#include <active_set_system/global_active_set_manager.h>
+#include <engine/al_progress.h>
+#include <algorithm>
+#include <cmath>
+
+namespace uipc::backend::cuda
+{
+void SimEngine::advance_AL()
+{
+    Float  alpha                 = 1.0;
+    Float  ccd_alpha             = 1.0;
+    Float  remaining_weight      = 1.0;
+    IndexT completed_outer_steps = 0;
+
+    /***************************************************************************************
+    *                                  Function Shortcuts
+    ***************************************************************************************/
+
+    auto linearize_constraints = [this]
+    {
+        if(m_global_active_set_manager)
+        {
+            Timer timer{"Linearize Contact Constraints"};
+            m_global_active_set_manager->linearize_constraints();
+            m_global_active_set_manager->update_slack();
+        }
+    };
+
+    auto recover_non_penetrate_positions = [this]
+    {
+        if(m_global_active_set_manager)
+        {
+            Timer timer{"Recover to Non-Penetrating Positions"};
+            m_global_active_set_manager->recover_non_penetrate_positions();
+        }
+    };
+
+    auto detect_trajectory_candidates = [this](Float alpha)
+    {
+        if(m_global_trajectory_filter)
+        {
+            Timer timer{"Detect Trajectory Candidates"};
+            m_global_trajectory_filter->detect(alpha);
+        }
+    };
+
+    auto compute_adaptive_mu = [this]
+    {
+        if(m_global_active_set_manager)
+        {
+            Timer timer{"Compute Adaptive Mu"};
+            m_global_active_set_manager->disable();
+
+            bool initialized = false;
+            if(m_global_active_set_manager->mu_scale_mode() == "diag_norm" && m_global_linear_system)
+            {
+                // Assemble the unconstrained objective once. Disabling the
+                // active set keeps AL contact out of the Hessian used to
+                // choose the conditioning-aware penalty scale.
+                if(m_global_dytopo_effect_manager)
+                    m_global_dytopo_effect_manager->compute_dytopo_effect();
+
+                const Float diagonal_norm = m_global_linear_system->diag_norm();
+                const Float mu =
+                    diagonal_norm * m_global_active_set_manager->mu_scale_diag_norm();
+                if(std::isfinite(mu) && mu > 0.0)
+                {
+                    m_global_active_set_manager->init_mu_from_scalar(mu);
+                    initialized = true;
+                    logger::info(
+                        "AL penalty initialization: mode=diag_norm, "
+                        "diag_norm={}, scale={}, mu={}",
+                        diagonal_norm,
+                        m_global_active_set_manager->mu_scale_diag_norm(),
+                        mu);
+                }
+                else
+                {
+                    logger::warn(
+                        "AL diag-norm penalty initialization produced {}, "
+                        "falling back to per-vertex scaling.",
+                        mu);
+                }
+            }
+
+            if(!initialized)
+            {
+                m_global_active_set_manager->init_mu();
+                logger::info("AL penalty initialization: mode=per_vertex");
+            }
+            m_global_active_set_manager->enable();
+        }
+    };
+
+    auto compute_dytopo_effect = [this]
+    {
+        // compute the dytopo effect gradient and hessian, containing:
+        // 1) contact effect from contact pairs
+        // 2) other dynamic topo effects, e.g. point picker, vertex stitch ...
+        if(m_global_dytopo_effect_manager)
+        {
+            Timer timer{"Compute DyTopo Effect"};
+            m_global_dytopo_effect_manager->compute_dytopo_effect();
+        }
+    };
+
+    auto filter_toi = [&ccd_alpha, this](Float alpha)
+    {
+        if(m_global_trajectory_filter)
+        {
+            Timer timer{"Filter CCD TOI"};
+            ccd_alpha = m_global_trajectory_filter->filter_toi(alpha);
+            m_frame_last_ccd_toi = ccd_alpha;
+            if(ccd_alpha < alpha)
+            {
+                logger::info("CCD Filter: {} < {}", ccd_alpha, alpha);
+                return ccd_alpha;
+            }
+        }
+
+        return alpha;
+    };
+
+    auto compute_energy = [this](Float alpha) -> Float
+    {
+        // Step Forward => x = x_0 + alpha * dx
+        m_global_vertex_manager->step_forward(alpha);
+        m_line_searcher->step_forward(alpha);
+
+        // Unlike IPC Advance,
+        // we don't need to filter the contact candidates here
+
+        // Compute New Energy => E
+        return m_line_searcher->compute_energy(false);
+    };
+
+    auto compute_animation_substep_ratio = [this](SizeT newton_iter)
+    {
+        // compute the ratio to the aim position.
+        // dst = prev_position + ratio * (position - prev_position)
+        if(m_global_animator)
+        {
+            m_global_animator->compute_substep_ratio(newton_iter);
+            logger::info("Animation Substep Ratio: {}", m_global_animator->substep_ratio());
+        }
+    };
+
+    auto animation_reach_target = [this]()
+    {
+        if(m_global_animator)
+        {
+            return m_global_animator->substep_ratio() >= 1.0;
+        }
+        return true;
+    };
+
+    auto convergence_check = [&](SizeT newton_iter) -> bool
+    {
+        if(m_dump_surface->view()[0])
+        {
+            dump_global_surface();
+        }
+
+        // NewtonToleranceManager::ResultInfo result_info;
+        // result_info.frame(m_current_frame);
+        // result_info.newton_iter(newton_iter);
+        // m_newton_tolerance_manager->check(result_info);
+
+
+        if(!animation_reach_target())
+            return false;
+
+        if(m_global_active_set_manager)
+        {
+            auto toi_threshold = m_global_active_set_manager->toi_threshold();
+            if(remaining_weight > toi_threshold)
+                return false;
+        }
+
+        return true;
+    };
+
+    auto update_diff_parm = [this]()
+    {
+        if(m_global_diff_sim_manager)
+        {
+            Timer timer{"Update Diff Parm"};
+            m_global_diff_sim_manager->update();
+        }
+    };
+
+    auto report_line_search_failure = [&](Float trial_alpha, Float E0, Float E)
+    {
+        m_frame_hit_line_search_limit = true;
+        Float abs_E0                  = std::abs(E0);
+        Float rel_E_increase = (E - E0) / (abs_E0 > 1e-30 ? abs_E0 : 1e-30);
+        auto  detail         = fmt::format(
+            "Line Search Exits with Max Iteration: {} (Frame={}, alpha_last={}, "
+                     "E0={:.6e}, E_last={:.6e}, rel_E_increase={:.3e}); "
+                     "rejecting the trial step",
+            m_line_searcher->max_iter(),
+            m_current_frame,
+            trial_alpha,
+            E0,
+            E,
+            rel_E_increase);
+        logger::warn("{}", detail);
+
+        if(m_strict_mode->view()[0])
+            throw SimEngineException("StrictMode: " + detail);
+    };
+
+    auto check_newton_iter = [this](SizeT iter)
+    {
+        if(iter >= m_newton_max_iter->view()[0])
+        {
+            m_frame_hit_newton_limit = true;
+            logger::warn("Newton Iteration Exits with Max Iteration: {} (Frame={})",
+                         m_newton_max_iter->view()[0],
+                         m_current_frame);
+
+            if(m_strict_mode->view()[0])
+            {
+                throw SimEngineException("StrictMode: Newton Iteration Exits with Max Iteration");
+            }
+        }
+        else
+        {
+            logger::info("Newton Iteration Converged with Iteration Count: {}, Bound: [{}, {}]",
+                         iter,
+                         m_newton_min_iter->view()[0],
+                         m_newton_max_iter->view()[0]);
+        }
+    };
+
+    /***************************************************************************************
+    *                                  Core Pipeline
+    ***************************************************************************************/
+
+    // Abort on exception if the runtime check is enabled for debugging
+    constexpr bool AbortOnException = uipc::RUNTIME_CHECK;
+
+    auto pipeline = [&]() noexcept(AbortOnException)
+    {
+        Timer timer{"Pipeline"};
+
+        ++m_current_frame;
+        reset_frame_stats();
+
+        logger::info(R"(>>> Begin Frame: {})", m_current_frame);
+
+        // Rebuild Scene
+        {
+            Timer timer{"Rebuild Scene"};
+            // Trigger the rebuild_scene event, systems register their actions will be called here
+            m_state = SimEngineState::RebuildScene;
+            {
+                event_rebuild_scene();
+
+                // TODO: rebuild the vertex and surface info
+                // m_global_vertex_manager->rebuild_vertex_info();
+                // m_global_surface_manager->rebuild_surface_info();
+            }
+
+            // After the rebuild_scene event, the pending creation or deletion can be solved
+            world().scene().solve_pending();
+
+            // Update the diff parms
+            update_diff_parm();
+        }
+
+        // Simulation:
+        {
+            Timer timer{"Simulation"};
+            // 1. Process External Changes
+            // (may trigger require_discard_friction on GlobalActiveSetManager)
+            m_global_vertex_manager->update_attributes();
+
+            // 2. Snapshot friction candidates.
+            // linearize_constraints() uses non_penetrate_positions stored in GASM.
+            // Must be called after update_attributes() so that discard signals are respected.
+            if(m_global_active_set_manager && m_friction_enabled)
+                m_global_active_set_manager->snapshot_friction_candidates();
+
+            m_global_vertex_manager->record_prev_positions();
+            if(m_global_active_set_manager)
+            {
+                m_global_active_set_manager->record_non_penetrate_positions();
+                // m_global_active_set_manager->filter_active();
+            }
+
+            // 2. Predict Motion => x_tilde = x + v * dt
+            m_state = SimEngineState::PredictMotion;
+            // MUST step animation before predicting dof (following basic IPC pattern)
+            // and before compute_adaptive_mu to ensure constraints report extents
+            step_animation_and_external_forces();
+            m_time_integrator_manager->predict_dof();
+
+            // 3. Adaptive Parameter Calculation
+            // Now safe to call compute_adaptive_mu->diag_norm() after step_animation
+            compute_adaptive_mu();
+
+            // 4. Nonlinear-Newton Iteration
+            m_newton_tolerance_manager->pre_newton(m_current_frame);
+
+            auto   newton_max_iter = m_newton_max_iter->view()[0];
+            auto   newton_min_iter = m_newton_min_iter->view()[0];
+            IndexT newton_iter     = 0;
+            for(; newton_iter < newton_max_iter; ++newton_iter)
+            {
+                Timer timer{"Newton Iteration"};
+                m_newton_iter             = newton_iter;
+                m_frame_newton_iterations = newton_iter + 1;
+
+                // 1) Compute animation substep ratio
+                compute_animation_substep_ratio(newton_iter);
+
+                // 2) Linearize contact constraints
+                linearize_constraints();
+
+                // 3) Compute Dynamic Topo Effect Gradient and Hessian => G:Vector3, H:Matrix3x3
+                //    - Contact Effect
+                //    - Other DyTopo Effects
+                m_state = SimEngineState::ComputeDyTopoEffect;
+                compute_dytopo_effect();
+
+
+                // 4) Solve Global Linear System => dx = A^-1 * b
+                m_state = SimEngineState::SolveGlobalLinearSystem;
+                {
+                    Timer timer{"Solve Global Linear System"};
+                    m_global_linear_system->solve();
+                    m_frame_linear_solver_iterations +=
+                        m_global_linear_system->last_solve_iterations();
+                }
+
+                NewtonToleranceManager::ResultInfo result_info;
+                result_info.frame(m_current_frame);
+                result_info.newton_iter(newton_iter);
+                m_newton_tolerance_manager->check(result_info);
+                bool newton_converged = result_info.converged();
+
+                // 5) Collect Vertex Displacements Globally
+                m_global_vertex_manager->collect_vertex_displacements();
+
+                // 6) Begin Line Search
+                m_state                     = SimEngineState::LineSearch;
+                SizeT line_search_iter      = 0;
+                bool  line_search_succeeded = false;
+                {
+                    Timer timer{"Line Search"};
+
+                    // Reset Alpha
+                    alpha = 1.0;
+
+                    // Record Current State x to x_0
+                    m_line_searcher->record_start_point();
+                    m_global_vertex_manager->record_start_point();
+
+                    // Compute Current Energy => E_0
+                    Float E0 = m_line_searcher->compute_energy(true);  // initial energy
+
+                    // * Step Forward => x = x_0 + alpha * dx
+                    // Compute Test Energy => E
+                    m_frame_last_line_search_alpha = alpha;
+                    Float E                        = compute_energy(alpha);
+                    ++m_frame_line_search_trials;
+
+                    while(true)
+                    {
+                        Timer timer{"Line Search Iteration"};
+                        m_line_search_iter = line_search_iter;
+
+                        // Check every trial, including the final permitted
+                        // backtracking step. A rejected trial is never allowed
+                        // to become the next Newton state.
+                        line_search_succeeded =
+                            details::al_line_search_accepts(E0, E, newton_converged);
+                        if(line_search_succeeded
+                           || line_search_iter >= m_line_searcher->max_iter())
+                            break;
+
+                        alpha /= 2;
+                        ++line_search_iter;
+                        m_frame_last_line_search_alpha = alpha;
+                        E                              = compute_energy(alpha);
+                        ++m_frame_line_search_trials;
+                    }
+
+                    if(!line_search_succeeded)
+                    {
+                        const Float rejected_alpha = alpha;
+                        // Restore the recorded start point before reporting;
+                        // strict mode may throw from the report function.
+                        alpha = 0.0;
+                        m_global_vertex_manager->step_forward(alpha);
+                        m_line_searcher->step_forward(alpha);
+                        m_frame_last_line_search_alpha = alpha;
+                        report_line_search_failure(rejected_alpha, E0, E);
+                    }
+                }
+
+                if(!line_search_succeeded)
+                    break;
+
+                // A backtracked step has not solved the current fixed-slack
+                // subproblem. Continue Newton without changing multipliers or
+                // the collision-free reference state; a full step marks the
+                // inner AL solve boundary.
+                if(line_search_iter > 0 && !newton_converged)
+                    continue;
+
+                // 7) CCD for AL contact
+                m_state = SimEngineState::AdvanceNonPenetrate;
+                if(m_global_active_set_manager)
+                {
+                    Timer timer{"Advance Non-Penetrating Positions"};
+                    m_global_active_set_manager->update_lambda();
+
+                    // Setup Displacements for CCD
+                    m_global_active_set_manager->prepare_ccd();
+                    detect_trajectory_candidates(1.0);
+                    alpha = filter_toi(1.0);
+                    m_global_active_set_manager->update_active_set();
+                    m_global_active_set_manager->post_ccd();
+
+                    if(!std::isfinite(alpha))
+                    {
+                        logger::warn("AL CCD returned a non-finite step; clamping progress to zero.");
+                        alpha = 0.0;
+                    }
+                    else
+                    {
+                        alpha = std::clamp(alpha, Float{0.0}, Float{1.0});
+                    }
+
+                    if(alpha > m_global_active_set_manager->alpha_lower_bound())
+                        m_global_active_set_manager->advance_non_penetrate_positions(alpha);
+                    else
+                        alpha = 0.0;
+                }
+
+                // Algorithm 1: the early-state weight remains one through the
+                // first K_min - 1 completed outer solves, then every applied
+                // collision-free step attenuates it by (1 - alpha).
+                ++completed_outer_steps;
+                const IndexT k_min =
+                    details::al_effective_k_min(m_semi_implicit_enabled,
+                                                m_semi_implicit_kmin->view()[0]);
+                remaining_weight = details::al_update_remaining_weight(
+                    remaining_weight, alpha, completed_outer_steps, k_min);
+
+                bool converged = convergence_check(newton_iter);
+                bool terminated = converged && (newton_iter + 1 >= newton_min_iter);
+
+                if(terminated)
+                {
+                    m_frame_converged = true;
+                    break;
+                }
+            }
+
+            m_state = SimEngineState::RecoverNonPenetrate;
+            recover_non_penetrate_positions();
+
+            // 5. Update Velocity => v = (x - x_0) / dt
+            m_state = SimEngineState::UpdateVelocity;
+            {
+                Timer timer{"Update Velocity"};
+                m_time_integrator_manager->update_state();
+            }
+
+            // Check Newton Iteration
+            // report warnings or throw exceptions if needed
+            if(!m_frame_hit_line_search_limit)
+                check_newton_iter(newton_iter);
+            m_frame_completed = true;
+        }
+
+        logger::info("<<< End Frame: {}", m_current_frame);
+    };
+
+    try
+    {
+        pipeline();
+    }
+    catch(const SimEngineException& e)
+    {
+        logger::error("Engine Advance Error: {}", e.what());
+        status().push_back(core::EngineStatus::error(e.what()));
+    }
+    catch(const std::exception& e)
+    {
+        UIPC_ASSERT(false, "Unexpected Exception: {}", e.what());
+    }
+}
+}  // namespace uipc::backend::cuda

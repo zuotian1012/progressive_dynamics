@@ -1,0 +1,17 @@
+{
+  "source_delivery_ready": true,
+  "public_upload_done": false,
+  "candidate_files": 4165,
+  "candidate_bytes": 31064589,
+  "files_over_50_MiB": [],
+  "compiled_or_download_files": [],
+  "common_secret_pattern_hits": [],
+  "secret_scan_scope": "Common patterns in candidate text files; not an exhaustive audit.",
+  "python_syntax_errors": [],
+  "source_workspace_changed_files": [],
+  "remaining_work": [
+    "Supply requested large scene inputs separately",
+    "Numerical validation of the newly compiled GPU binary",
+    "Decide repository-wide licensing and public distribution scope"
+  ]
+}

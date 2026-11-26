@@ -1,0 +1,20 @@
+* text=auto
+*.py text eol=lf
+*.md text eol=lf
+*.json text eol=lf
+*.cu text eol=lf
+*.cuh text eol=lf
+*.cpp text eol=lf
+*.h text eol=lf
+*.inl text eol=lf
+*.sh text eol=lf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+*.npz binary
+*.npy binary
+*.png binary
+*.gif binary
+*.pdf binary
+# These source snapshots have byte-level provenance manifests. Preserve their
+# bytes across Git checkouts even when a contributor enables core.autocrlf.
+/third_party/** -text

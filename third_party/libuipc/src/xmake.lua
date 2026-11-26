@@ -1,0 +1,48 @@
+includes(
+    "backends",
+    "core",
+    "geometry"
+)
+
+if has_config("vdb") then
+    includes("vdb")
+end
+
+if has_config("usd") then
+    includes("usd")
+end
+
+if has_config("pybind") then
+    includes("pybind")
+end
+
+add_requires("urdfdom")
+
+target("uipc_constitution")
+    add_rules("component")
+    add_files("constitution/*.cpp")
+    add_headerfiles(path.join(os.projectdir(), "include/uipc/constitution/*.h"))
+    add_deps("uipc_geometry")
+
+target("uipc_io")
+    add_rules("component")
+    add_files("io/*.cpp")
+    add_headerfiles(path.join(os.projectdir(), "include/uipc/io/*.h"))
+    add_deps("uipc_geometry")
+    add_packages("urdfdom")
+
+target("uipc_sanity_check")
+    add_rules("component")
+    add_files("sanity_check/*.cpp")
+    add_includedirs("sanity_check")
+    add_headerfiles("sanity_check/*.h", "sanity_check/details/*.inl")
+    add_deps("uipc_geometry", "uipc_io")
+
+rule("uipc_deps")
+    on_load(function (target)
+        local deps = {"uipc_core", "uipc_geometry", "uipc_io", "uipc_constitution", "uipc_sanity_check", "none"}
+        if has_config("usd") then
+            table.insert(deps, "uipc_usd")
+        end
+        target:add("deps", deps)
+    end)
