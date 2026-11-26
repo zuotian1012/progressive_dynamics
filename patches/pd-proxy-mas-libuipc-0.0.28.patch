@@ -1,0 +1,84 @@
+diff --git a/src/backends/cuda/finite_element/fem_mas_preconditioner.cu b/src/backends/cuda/finite_element/fem_mas_preconditioner.cu
+index aee432a..af5ea6b 100644
+--- a/src/backends/cuda/finite_element/fem_mas_preconditioner.cu
++++ b/src/backends/cuda/finite_element/fem_mas_preconditioner.cu
+@@ -212,7 +212,8 @@ class FEMMASPreconditioner : public LocalPreconditioner
+         // (BANKSIZE), so the user's scene geometry is never mutated.
+ 
+         std::vector<IndexT> part_ids(vert_num, -1);
+-        bool                has_parts = false;
++        SizeT               covered_vertices = 0;
++        SizeT               proxy_vertices   = 0;
+ 
+         // Partition IDs are mesh-local (each mesh starts at 0).
+         // We add a running offset so that IDs are globally unique
+@@ -228,10 +229,11 @@ class FEMMASPreconditioner : public LocalPreconditioner
+             if(!sc || sc->dim() < 1 || geo_info.vertex_count == 0)
+                 continue;
+ 
+-            // Empty constitution (no material): skip, stays on the
+-            // diagonal fallback
++            // A PD proxy uses Empty to suppress native elasticity, but contributes
++            // a restricted fine elastic Hessian to this FEM block.
+             auto cuid = geo.meta().find<U64>(builtin::constitution_uid);
+-            if(!cuid || cuid->view()[0] == kEmptyConstitutionUID)
++            bool proxy = sc->dim() == 2 && geo.meta().find<std::string>("pd_cloth_proxy_asset");
++            if(!cuid || (cuid->view()[0] == kEmptyConstitutionUID && !proxy))
+                 continue;
+ 
+             std::vector<IndexT> local_parts;
+@@ -249,31 +251,38 @@ class FEMMASPreconditioner : public LocalPreconditioner
+                 local_parts.assign(pv.begin(), pv.end());
+             }
+ 
+-            has_parts        = true;
++            UIPC_ASSERT_THROW(local_parts.size() == geo_info.vertex_count,
++                              "MAS partition vertex count does not match FEM geometry.");
+             IndexT local_max = 0;
+             for(SizeT v = 0; v < geo_info.vertex_count; v++)
+             {
+                 IndexT local_pid = local_parts[v];
++                if(local_pid < 0)
++                    continue;
+                 part_ids[geo_info.vertex_offset + v] = local_pid + partition_offset;
++                ++covered_vertices;
++                if(proxy)
++                    ++proxy_vertices;
+                 local_max = std::max(local_max, local_pid);
+             }
+             partition_offset += local_max + 1;  // next mesh starts after this mesh's max
+         }
+ 
+-        if(!has_parts)
++        if(covered_vertices == 0)
+         {
+             m_has_partition = false;
+             return;
+         }
+ 
+-        // Tag Empty (non-cloth) FEM vertices; they must not carry mesh_part when using MAS.
++        // Mass-only Empty geometries must stay outside the elastic partition.
+         std::vector<uint8_t> h_non_cloth_fem(vert_num, 0);
+         for(auto& geo_info : fem.geo_infos)
+         {
+             auto& geo_slot = geo_slots[geo_info.geo_slot_index];
+             auto& geo      = geo_slot->geometry();
+             auto  cuid     = geo.meta().find<U64>(builtin::constitution_uid);
+-            if(!cuid || cuid->view()[0] != kEmptyConstitutionUID)
++            if(!cuid || cuid->view()[0] != kEmptyConstitutionUID
++               || (geo_info.dim_uid.dim == 2 && geo.meta().find<std::string>("pd_cloth_proxy_asset")))
+                 continue;
+             for(SizeT v = 0; v < geo_info.vertex_count; ++v)
+                 h_non_cloth_fem[geo_info.vertex_offset + v] = 1;
+@@ -399,8 +408,11 @@ class FEMMASPreconditioner : public LocalPreconditioner
+                              h_real_to_part);
+ 
+         engine.init_matrix();
++        UIPC_ASSERT_THROW(engine.is_initialized(), "MAS matrix initialization failed.");
+ 
+         m_has_partition = true;
++        logger::info("FEM MAS initialized: covered_vertices={} total_vertices={} proxy_vertices={} partitions={}",
++                     covered_vertices, vert_num, proxy_vertices, part_blocks.size());
+     }
+ 
+     virtual void do_assemble(GlobalLinearSystem::LocalPreconditionerAssemblyInfo& info) override

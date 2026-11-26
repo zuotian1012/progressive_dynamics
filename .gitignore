@@ -1,0 +1,10 @@
+.env
+__pycache__/
+*.pyc
+*.npz*
+*.npy
+*.f64
+*.so*
+*.pkl
+.venv/
+envs/

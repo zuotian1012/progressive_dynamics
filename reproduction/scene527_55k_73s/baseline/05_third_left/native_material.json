@@ -1,0 +1,40 @@
+{
+  "parameterization": "native",
+  "pyuipc_version": "0.0.28",
+  "backend_sha256": {
+    "/home/hasinon/Workspace/PD/dependencies/pyuipc-v0.0.28/uipc/_native/libuipc_backend_cuda.so": "ee2da97a71c9ad87e8797d407aa9741460e9cb06d65700bbe1151caf57bfe2c5"
+  },
+  "meshes": [
+    {
+      "parameterization": "native",
+      "legacy_adapter_applied": false,
+      "stretch_E": 9800.0,
+      "shear_E": 4.0,
+      "nu": 0.49,
+      "rho": 800.0,
+      "radius_m": 0.0001,
+      "uniform_kappa": 1e-07,
+      "strain_rate_input": 100.0,
+      "lambda": {
+        "count": 55068,
+        "min": 2.5792867482563495,
+        "max": 2.5792867482563495
+      },
+      "mu": {
+        "count": 55068,
+        "min": 1.342281879194631,
+        "max": 1.342281879194631
+      },
+      "strain_rate": {
+        "count": 55068,
+        "min": 100.0,
+        "max": 100.0
+      },
+      "kappa": {
+        "count": 82881,
+        "min": 1e-07,
+        "max": 1e-07
+      }
+    }
+  ]
+}

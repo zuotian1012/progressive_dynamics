@@ -1,0 +1,206 @@
+--- a/src/backends/cuda/finite_element/progressive_cloth.cu
++++ b/src/backends/cuda/finite_element/progressive_cloth.cu
+@@ -68,6 +68,53 @@
+            + F * (adjugate * offset.local.head<2>()) / (det_sqrt * sqrt(trace));
+ }
+ 
++// Differential of the nonlinear PSQ offset. For the thin polar frame
++// R=[r0,r1,n], dq=omega x q, where omega=n x dn + twist*n.
++struct OffsetJacobian
++{
++    Vector3i ids;
++    Matrix3x3 db, dc;  // da = -(db + dc) by translation invariance
++};
++
++__global__ void compute_offset_jacobians(cuda_tool::CBufferView<Vector3> coarse,
++    cuda_tool::CBufferView<ShellOffset> offsets, IndexT base,
++    cuda_tool::BufferView<OffsetJacobian> result)
++{
++    int i = blockIdx.x * blockDim.x + threadIdx.x;
++    if(i >= offsets.size()) return;
++    const auto& shell = offsets(i);
++    auto& jac = result(i);
++    jac.ids = shell.ids.array() + base;
++    jac.db.setZero();
++    jac.dc.setZero();
++    if(shell.local.squaredNorm() == 0) return;
++    const Vector3 a = coarse(base + shell.ids[0]);
++    const Vector3 e = coarse(base + shell.ids[1]) - a;
++    const Vector3 f = coarse(base + shell.ids[2]) - a;
++    const Vector3 cross = e.cross(f);
++    const Float area2 = cross.norm();
++    const Vector3 n = cross / area2;
++    Matrix<Float,3,2> edges;
++    edges << e, f;
++    const Matrix<Float,3,2> F = edges * shell.inv_rest;
++    const Vector3 polar0 = F.col(0) + F.col(1).cross(n);
++    const Float trace_stretch = polar0.norm();
++    const Vector3 r0 = polar0 / trace_stretch;
++    const Vector3 r1 = n.cross(r0);
++    const Vector3 q = r0 * shell.local[0] + r1 * shell.local[1] + n * shell.local[2];
++    for(int k = 0; k < 3; ++k)
++    {
++        const Vector3 axis = Vector3::Unit(k);
++        for(int side = 0; side < 2; ++side)
++        {
++            const Vector3 dcross = side == 0 ? axis.cross(f) : e.cross(axis);
++            const Float twist = (r1[k] * shell.inv_rest(side,0) - r0[k] * shell.inv_rest(side,1)) / trace_stretch;
++            const Vector3 omega = n.cross(dcross) / area2 + twist * n;
++            (side == 0 ? jac.db : jac.dc).col(k) = omega.cross(q);
++        }
++    }
++}
++
+ template <int N>
+ struct Transfer
+ {
+@@ -117,6 +164,7 @@
+ Transfer<N> make_transfer(const Vector<IndexT, N>& fine_ids,
+                           span<const BarycentricRow> rows,
+                           span<const WeightedVertex> weights,
++                          span<const ShellOffset> offsets,
+                           IndexT coarse_offset,
+                           vector<TransferColumn>& columns,
+                           SizeT& hessian_count)
+@@ -127,6 +175,9 @@
+     for(int i = 0; i < N; ++i)
+     {
+         const auto row = rows[fine_ids[i]];
++        if(!offsets.empty() && offsets[fine_ids[i]].local.squaredNorm() > 0)
++            for(int k = 0; k < 3; ++k)
++                local_columns.try_emplace(offsets[fine_ids[i]].ids[k] + coarse_offset, Vector4::Zero());
+         for(auto j = row.begin; j < row.end; ++j)
+         {
+             const auto entry = weights[j];
+@@ -173,6 +224,7 @@
+ __device__ void restrict_gradient(const Transfer<N>& transfer,
+                                  const Vector<Float, 3 * N>& local,
+                                  cuda_tool::CBufferView<TransferColumn> columns,
++                                 cuda_tool::CBufferView<OffsetJacobian> offset_jacobians,
+                                  cuda_tool::DoubletVectorView<Float, 3> gradients)
+ {
+     for(int col = 0; col < transfer.count; ++col)
+@@ -180,7 +232,17 @@
+         const auto& column = columns(transfer.gradient_offset + col);
+         Vector3 block = Vector3::Zero();
+         for(int i = 0; i < N; ++i)
+-            block += column.weights[i] * local.template segment<3>(3 * i);
++        {
++            const Vector3 g = local.template segment<3>(3 * i);
++            block += column.weights[i] * g;
++            if(offset_jacobians.size())
++            {
++                const auto& jac = offset_jacobians(transfer.fine_ids[i]);
++                if(column.id == jac.ids[0]) block -= (jac.db + jac.dc).transpose() * g;
++                if(column.id == jac.ids[1]) block += jac.db.transpose() * g;
++                if(column.id == jac.ids[2]) block += jac.dc.transpose() * g;
++            }
++        }
+         gradients(transfer.gradient_offset + col).write(column.id, block);
+     }
+ }
+@@ -280,6 +342,7 @@
+ __global__ void assemble_membrane(cuda_tool::CBufferView<Membrane> triangles,
+                                   cuda_tool::CBufferView<Vector3> xs,
+                                   cuda_tool::CBufferView<TransferColumn> columns,
++                                cuda_tool::CBufferView<OffsetJacobian> offset_jacobians,
+                                 Material material,
+                                   Float dt2,
+                                   cuda_tool::DoubletVectorView<Float, 3> gradients,
+@@ -298,7 +361,7 @@
+     BWS::dEdF(dEdF, F, Vector2::UnitX(), Vector2::UnitY(),
+               material.stretch, material.shear, material.strain_rate);
+     Vector9 local_gradient = scale * (jacobian.transpose() * BWS::flatten(dEdF));
+-    restrict_gradient(tri.transfer, local_gradient, columns, gradients);
++    restrict_gradient(tri.transfer, local_gradient, columns, offset_jacobians, gradients);
+     if(gradient_only)
+         return;
+ 
+@@ -315,6 +378,7 @@
+ __global__ void assemble_hinges(cuda_tool::CBufferView<Hinge> hinges,
+                                 cuda_tool::CBufferView<Vector3> xs,
+                                 cuda_tool::CBufferView<TransferColumn> columns,
++                                cuda_tool::CBufferView<OffsetJacobian> offset_jacobians,
+                                 Material material,
+                                 Float dt2,
+                                 cuda_tool::DoubletVectorView<Float, 3> gradients,
+@@ -336,7 +400,7 @@
+     DSB::dEdx(local_gradient, a, b, c, d, hinge.length, hinge.height,
+               hinge.angle, material.kappa);
+     local_gradient *= scale;
+-    restrict_gradient(hinge.transfer, local_gradient, columns, gradients);
++    restrict_gradient(hinge.transfer, local_gradient, columns, offset_jacobians, gradients);
+     if(gradient_only)
+         return;
+ 
+@@ -365,6 +429,7 @@
+     cuda_tool::DeviceBuffer<BarycentricRow> rows;
+     cuda_tool::DeviceBuffer<WeightedVertex> row_weights;
+     cuda_tool::DeviceBuffer<ShellOffset> shell_offsets;
++    cuda_tool::DeviceBuffer<OffsetJacobian> offset_jacobians;
+     cuda_tool::DeviceBuffer<TransferColumn> transfer_columns;
+     cuda_tool::DeviceBuffer<Vector3> fine_positions;
+     cuda_tool::DeviceBuffer<Membrane> triangles;
+@@ -387,14 +452,14 @@
+         auto membrane = assemble_membrane;
+         int count = static_cast<int>(triangles.size());
+         membrane<<<cuda_tool::best_grid_dim(count, membrane), cuda_tool::best_block_dim(membrane)>>>(
+-            triangles.cview(), fine_positions.cview(), transfer_columns.cview(), material, dt * dt, gradients, hessians,
++            triangles.cview(), fine_positions.cview(), transfer_columns.cview(), offset_jacobians.cview(), material, dt * dt, gradients, hessians,
+             gradient_only, project);
+         if(hinges.size())
+         {
+             auto bending = assemble_hinges;
+             count = static_cast<int>(hinges.size());
+             bending<<<cuda_tool::best_grid_dim(count, bending), cuda_tool::best_block_dim(bending)>>>(
+-                hinges.cview(), fine_positions.cview(), transfer_columns.cview(), material, dt * dt, gradients, hessians,
++                hinges.cview(), fine_positions.cview(), transfer_columns.cview(), offset_jacobians.cview(), material, dt * dt, gradients, hessians,
+                 gradient_only, project);
+         }
+     }
+@@ -524,7 +589,7 @@
+         const auto& c = rest[tri[2]];
+         Float area = (b - a).cross(c - a).norm() / 2;
+         UIPC_ASSERT_THROW(area > 0 && std::isfinite(area), "Degenerate progressive cloth triangle");
+-        triangles.push_back({make_transfer(tri, rows, row_weights, coarse_offset, transfer_columns,
++        triangles.push_back({make_transfer(tri, rows, row_weights, shell_offsets, coarse_offset, transfer_columns,
+                                            impl.hessian_count),
+                              BWS::Dm2x2(a, b, c).inverse(), area});
+         for(int i = 0; i < 3; ++i)
+@@ -545,7 +610,7 @@
+             std::sort(opposite.begin(), opposite.end());
+             Vector4i ids{opposite[0], edge.first, edge.second, opposite[1]};
+             Hinge hinge;
+-            hinge.transfer = make_transfer(ids, rows, row_weights, coarse_offset, transfer_columns,
++            hinge.transfer = make_transfer(ids, rows, row_weights, shell_offsets, coarse_offset, transfer_columns,
+                                            impl.hessian_count);
+             DSB::compute_constants(hinge.length, hinge.height, hinge.angle, hinge.weight,
+                                    rest[ids[0]], rest[ids[1]], rest[ids[2]], rest[ids[3]],
+@@ -559,7 +624,10 @@
+     upload(impl.rows, rows);
+     upload(impl.row_weights, row_weights);
+     if(use_psq)
++        {
+         upload(impl.shell_offsets, shell_offsets);
++        impl.offset_jacobians.resize(shell_offsets.size());
++    }
+     upload(impl.transfer_columns, transfer_columns);
+     upload(impl.triangles, triangles);
+     if(!hinges.empty())
+@@ -626,7 +694,15 @@
+ {
+     auto& impl = *m_impl;
+     impl.predict(xs);
+-    // PSQ holds the nonlinear offset constant when differentiating: restrict with U.
++    // Use the exact elastic gradient with the existing positive-semidefinite
++    // U-transferred Hessian approximation as the search metric.
++    if(impl.shell_offsets.size())
++    {
++        const int n = static_cast<int>(impl.shell_offsets.size());
++        auto kernel = compute_offset_jacobians;
++        kernel<<<cuda_tool::best_grid_dim(n,kernel),cuda_tool::best_block_dim(kernel)>>>(
++            xs,impl.shell_offsets.cview(),impl.coarse_offset,impl.offset_jacobians.view());
++    }
+     impl.assemble(dt, gradients, hessians, gradient_only, true);
+ 
+     if(!gradient_only && !impl.audit_recorded && impl.audit_frame == frame

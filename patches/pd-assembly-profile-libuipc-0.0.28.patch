@@ -1,0 +1,54 @@
+--- a/src/backends/cuda/finite_element/finite_element_elastics.cu
++++ b/src/backends/cuda/finite_element/finite_element_elastics.cu
+@@ -1,3 +1,4 @@
++#include <uipc/common/timer.h>
+ #include <finite_element/finite_element_elastics.h>
+ #include <finite_element/finite_element_constitution.h>
+ #include <finite_element/finite_element_extra_constitution.h>
+@@ -169,6 +170,7 @@
+     SizeT h_offset = constitution_hessian_offsets_counts.total_count();
+     for(auto& cloth : progressive_cloths)
+     {
++        Timer timer{"Assemble PD Proxy Elasticity"};
+         auto gradients = info.gradients().subview(g_offset, cloth->gradient_count());
+         cuda_tool::TripletMatrixView<Float, 3> hessians;
+         if(!info.gradient_only())
+--- a/src/backends/cuda/finite_element/fem_linear_subsystem.cu
++++ b/src/backends/cuda/finite_element/fem_linear_subsystem.cu
+@@ -1,3 +1,4 @@
++#include <uipc/common/timer.h>
+ #include <sim_engine.h>
+ #include <finite_element/fem_linear_subsystem.h>
+ #include <finite_element/fem_linear_subsystem_reporter.h>
+@@ -433,6 +434,7 @@
+ void FEMLinearSubsystem::Impl::_assemble_dytopo_effect(IndexT& hess_offset,
+                                                        GlobalLinearSystem::DiagInfo& info)
+ {
++    Timer timer{"Scatter FEM DyTopo Blocks"};
+     using namespace cuda_tool;
+ 
+     // No need to add to grad_offset, the grad buffer is not from reporter_gradients
+--- a/src/backends/cuda/dytopo_effect_system/global_dytopo_effect_manager.cu
++++ b/src/backends/cuda/dytopo_effect_system/global_dytopo_effect_manager.cu
+@@ -1,3 +1,4 @@
++#include <uipc/common/timer.h>
+ #include <sim_engine.h>
+ #include <dytopo_effect_system/global_dytopo_effect_manager.h>
+ #include <dytopo_effect_system/dytopo_effect_reporter.h>
+@@ -292,7 +293,15 @@
+             collected_dytopo_effect_gradient.view().subview(g_offset, g_count);
+         info.m_hessians = collected_dytopo_effect_hessian.view().subview(h_offset, h_count);
+ 
+-        reporter->assemble(info);
++        if(has_flags(reporter->component_flags(), EnergyComponentFlags::Contact))
++        {
++            Timer timer{"Assemble IPC Contact Reporters"};
++            reporter->assemble(info);
++        }
++        else
++        {
++            reporter->assemble(info);
++        }
+     }
+ }
+ 

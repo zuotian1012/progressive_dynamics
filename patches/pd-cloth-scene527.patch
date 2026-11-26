@@ -1,0 +1,309 @@
+--- a/dependencies/scene527-0.0.28/src/run_genesis_ipc.py
++++ b/dependencies/scene527-0.0.28/src/run_genesis_ipc.py
+@@ -6,6 +6,7 @@
+ import argparse
+ import hashlib
+ import json
++import mmap
+ import os
+ import shutil
+ import subprocess
+@@ -663,6 +664,15 @@
+                     cloth_pos = self._cloth_positions()
+                 tcp = self._tcp(hand)
+                 distances = np.linalg.norm(cloth_pos - tcp, axis=1)
++                from trimesh.triangles import closest_point
++
++                # Count local mesh support around the TCP using exact distance
++                # to each nearby triangle, including faces with no nearby vertex.
++                triangles = cloth_pos[np.asarray(self.cloth.elems)]
++                nearby = triangles[((triangles.min(axis=1) <= tcp + .02)
++                                    & (triangles.max(axis=1) >= tcp - .02)).all(axis=1)]
++                face_distances = np.linalg.norm(closest_point(nearby, np.broadcast_to(tcp, (len(nearby),3))) - tcp,
++                                                axis=1) if len(nearby) else np.empty(0)
+                 ids = np.argsort(distances)[: self.points]
+                 ids = ids[distances[ids] <= self.radius]
+                 hand["ids"] = ids.astype(np.int64)
+@@ -671,6 +681,11 @@
+                     "close_frame": int(source_frame),
+                     "end_frame": None,
+                     "tracked_points": int(len(ids)),
++                    "tcp_neighborhood": {
++                        f"{mm}mm": {"vertices": int(np.count_nonzero(distances <= mm / 1000)),
++                                     "faces": int(np.count_nonzero(face_distances <= mm / 1000))}
++                        for mm in (10,20)
++                    },
+                     "initial_patch": initial_patch,
+                     "initial_tcp": tcp,
+                     "initial_patch_tcp_distance_m": (
+@@ -1612,6 +1627,23 @@
+     parser.add_argument("--sim1-root", type=Path, required=True)
+     parser.add_argument("--trajectory", type=Path, required=True)
+     parser.add_argument("--shirt-obj", type=Path, required=True)
++    parser.add_argument("--pd-cloth-proxy", type=Path,
++                        help="Fine rest mesh and direct prolongation from prepare_pd_cloth_proxy.py")
++    parser.add_argument("--pd-cloth-backend-dir", type=Path,
++                        help="Directory containing the libuipc CUDA backend built with cloth proxy support")
++    parser.add_argument("--pd-cloth-integrator", choices=("bdf1", "progressive", "paper_eq5", "velpro"), default="bdf1")
++    parser.add_argument("--pd-cloth-velpro-velocity", type=Path,
++                        help="Float64 prolonged parent velocities, one XYZ row per IPC substep")
++    parser.add_argument("--pd-cloth-paper-state", type=Path,
++                        help="Float64 per-substep prolonged coarse positions followed by velocities")
++    parser.add_argument("--pd-cloth-audit", nargs=2, metavar=("IPC_FRAME", "DIRECTORY"),
++                        help="Export the predictor and assembled proxy gradient/Hessian at Newton iteration zero")
++    parser.add_argument("--pd-cloth-delta-velocity", type=Path,
++                        help="Float64 XYZ increments, one contiguous row per IPC substep")
++    parser.add_argument("--pd-cloth-state-history", type=Path,
++                        help="Export native IPC positions and velocities at every substep")
++    parser.add_argument("--pd-cloth-soft-grasp", action="store_true",
++                        help="Allow soft virtual grasp on any vertex of the selected cloth mesh")
+     parser.add_argument("--expected-cloth-vertices", type=int, default=None,
+                         help="Optional topology guard checked before scene build/IPC stepping")
+     parser.add_argument("--expected-cloth-faces", type=int, default=None,
+@@ -1767,6 +1799,8 @@
+     parser.add_argument('--cloth-kappa',type=float,default=None,help='Native uniform bending kappa, N m; not contact stiffness')
+     parser.add_argument('--cloth-strain-rate',type=float,default=100.,help='Native 0.0.28 cubic extension amplification, dimensionless')
+     parser.add_argument('--ipc-contact-resistance',type=float,default=1e7,help='ContactTabular resistance input for cloth, table and robot; IPC may clamp it; AL normal uses separate penalties')
++    parser.add_argument("--ipc-newton-max-iterations", type=int,
++                        help="Override the IPC nonlinear iteration budget")
+     parser.add_argument("--cloth-rho", type=float, default=280.0)
+     parser.add_argument("--cloth-thickness", type=float, default=0.0002)
+     parser.add_argument("--cloth-bending", type=float, default=10.0)
+@@ -2589,8 +2623,8 @@
+             parser.error("Use Workbench action_plan_ik.py for explicit-plan CPU IK preflight")
+         if args.resolved_joint_trajectory or args.trajectory_stride != 1:
+             parser.error("--action-plan-trajectory requires stride 1 and no resolved override")
+-        if args.virtual_grasp or args.drive_mode != "direct":
+-            parser.error("--action-plan-trajectory requires direct control and real contact (no virtual grasp)")
++        if (args.virtual_grasp and not args.pd_cloth_soft_grasp) or args.drive_mode != "direct":
++            parser.error("--action-plan-trajectory requires direct control and a supported grasp mode")
+         if any((args.post_release_settle_frames, args.post_release_open_hold_frames, args.post_release_retreat_frames)):
+             parser.error("Action-plan holds/retreats must be explicit timeline actions")
+     if args.dump_replay_states is not None and not args.no_record:
+@@ -2802,6 +2836,57 @@
+ 
+ def main() -> None:
+     args = parse_args()
++    progressive = args.pd_cloth_integrator == "progressive"
++    paper_eq5 = args.pd_cloth_integrator == "paper_eq5"
++    velpro = args.pd_cloth_integrator == "velpro"
++    if paper_eq5 != (args.pd_cloth_paper_state is not None):
++        raise ValueError("paper_eq5 requires --pd-cloth-paper-state")
++    if args.pd_cloth_audit:
++        frame, directory = args.pd_cloth_audit
++        if not paper_eq5 or args.pd_cloth_proxy is None or int(frame) <= 0:
++            raise ValueError("Audit requires paper_eq5, a proxy and a positive IPC frame")
++        args.pd_cloth_audit = (str(int(frame)), str(Path(directory).resolve()))
++        Path(directory).mkdir(parents=True, exist_ok=True)
++    if progressive != (args.pd_cloth_delta_velocity is not None):
++        raise ValueError("Progressive integration requires --pd-cloth-delta-velocity")
++    if velpro != (args.pd_cloth_velpro_velocity is not None):
++        raise ValueError("VelPro requires --pd-cloth-velpro-velocity")
++    if (progressive or paper_eq5 or velpro or args.pd_cloth_state_history is not None) and (
++        args.replay_states is not None or args.trajectory_preflight_only
++        or args.load_third_fold_checkpoint is not None or args.verify_third_fold_checkpoint
++    ):
++        raise ValueError("Progressive velocity and history require a continuous simulation from the first step")
++    if args.pd_cloth_soft_grasp and (
++        not args.virtual_grasp or args.grasp_mode != "soft" or args.prepin_first_grasp
++    ):
++        raise ValueError("PD soft grasp requires --virtual-grasp --grasp-mode soft")
++    if (progressive or paper_eq5 or velpro or args.pd_cloth_proxy is not None) and args.pd_cloth_backend_dir is None:
++        raise ValueError("Progressive cloth requires --pd-cloth-backend-dir")
++    if args.pd_cloth_proxy is not None:
++        args.pd_cloth_proxy = require_file(args.pd_cloth_proxy).resolve()
++    if progressive:
++        args.pd_cloth_delta_velocity = require_file(args.pd_cloth_delta_velocity)
++    if paper_eq5:
++        args.pd_cloth_paper_state = require_file(args.pd_cloth_paper_state).resolve()
++    if velpro:
++        args.pd_cloth_velpro_velocity = require_file(args.pd_cloth_velpro_velocity).resolve()
++    if args.pd_cloth_backend_dir is not None:
++        backend_dir = args.pd_cloth_backend_dir.resolve()
++        backend = require_file(backend_dir / "libuipc_backend_cuda.so")
++        with backend.open("rb") as binary, mmap.mmap(binary.fileno(), 0, access=mmap.ACCESS_READ) as data:
++            if data.find(b"pd_cloth_proxy_asset") < 0:
++                raise ValueError("The selected CUDA backend does not support PD cloth proxies")
++            if progressive and data.find(b"pd_cloth_delta_velocity") < 0:
++                raise ValueError("The selected CUDA backend does not support progressive integration")
++            if paper_eq5 and data.find(b"pd_cloth_paper_eq5_state") < 0:
++                raise ValueError("The selected CUDA backend does not support paper_eq5")
++            if velpro and data.find(b"pd_cloth_velpro_velocity") < 0:
++                raise ValueError("The selected CUDA backend does not support VelPro")
++            if args.pd_cloth_audit and data.find(b"pd_cloth_audit_directory") < 0:
++                raise ValueError("The selected CUDA backend does not support fixed-substep exports")
++        config = uipc.default_config()
++        config["module_dir"] = str(backend_dir)
++        uipc.init(config)
+     persistent_checkpoint_requests = checkpoint_save_requests(args)
+     second_fold_material_plan = None
+     if args.second_fold_material_plan is not None:
+@@ -2928,6 +3013,10 @@
+         newton_tolerance = 1.0e-2
+         newton_translation_tolerance = 1.0e-3
+         linear_system_tolerance = 1.0e-3
++    if args.ipc_newton_max_iterations is not None:
++        if args.ipc_newton_max_iterations < 1:
++            raise ValueError("--ipc-newton-max-iterations must be positive")
++        newton_max_iterations = args.ipc_newton_max_iterations
+     # Cartesian trajectory preflight does not step IPC. Keep it independent of
+     # CUDA so a wedged viewer/driver cannot block reachability diagnostics.
+     genesis_backend = gs.cpu if args.trajectory_preflight_only else gs.gpu
+@@ -3139,6 +3228,22 @@
+             ),
+         )
+     if cloth is not None:
++        if args.pd_cloth_proxy is not None:
++            cloth._ipc_pd_cloth_proxy_asset = args.pd_cloth_proxy
++        if progressive:
++            cloth._ipc_pd_delta_velocity = args.pd_cloth_delta_velocity
++        if paper_eq5:
++            cloth._ipc_pd_paper_state = args.pd_cloth_paper_state
++        if velpro:
++            steps = args.settle_frames + frame_count * args.substeps
++            expected_bytes = steps * cloth.n_vertices * 3 * np.dtype("<f8").itemsize
++            if args.pd_cloth_velpro_velocity.stat().st_size != expected_bytes:
++                raise ValueError(f"VelPro requires {steps} rows for {cloth.n_vertices} cloth vertices")
++            cloth._ipc_pd_velpro_velocity = args.pd_cloth_velpro_velocity
++        if args.pd_cloth_audit:
++            cloth._ipc_pd_audit = args.pd_cloth_audit
++        if args.pd_cloth_state_history is not None:
++            cloth._ipc_pd_record_state = True
+         for label, expected, actual in (
+             ("vertices", args.expected_cloth_vertices, cloth.n_vertices),
+             ("faces", args.expected_cloth_faces, cloth.n_elements),
+@@ -3206,7 +3311,11 @@
+     if args.virtual_grasp and not args.trajectory_preflight_only:
+         if args.grasp_mode == "soft":
+             cloth.sim.coupler.set_fem_vertex_constraint_strength_rate(args.grasp_strength)
+-        if args.grasp_mode == "soft" and args.prepin_first_grasp:
++        if args.pd_cloth_soft_grasp:
++            cloth.sim.coupler.register_fem_vertex_constraint_candidates(
++                cloth, np.arange(cloth.n_vertices)
++            )
++        elif args.grasp_mode == "soft" and args.prepin_first_grasp:
+             cloth.sim.coupler.register_fem_vertex_constraint_candidates(
+                 cloth, np.concatenate(first_grasp_candidates)
+             )
+@@ -3219,6 +3328,28 @@
+             cloth._ipc_pair_friction_overrides = {table: float(args.cloth_table_pair_friction)}
+             print(f'cloth_table_pair_friction_override={args.cloth_table_pair_friction}',flush=True)
+     scene.build()
++    if args.pd_cloth_state_history is not None and cloth is not None:
++        coupler = cloth.sim.coupler
++        slot = cloth._ipc_pd_state_slot
++        offset = int(slot.geometry().meta().find(uipc.builtin.backend_fem_vertex_offset).view().item())
++        region = slice(offset, offset + cloth.n_vertices)
++        state = coupler._fem_state_geom
++        position = state.vertices().find(uipc.builtin.position)
++        velocity = state.vertices().find(uipc.builtin.velocity)
++        pd_positions, pd_velocities = [], []
++        pd_expected_frame = coupler._ipc_world.frame()
++
++        def record_pd_state():
++            nonlocal pd_expected_frame
++            if not coupler._ipc_world.is_valid() or coupler._ipc_world.frame() != pd_expected_frame:
++                raise RuntimeError(f"IPC did not reach expected frame {pd_expected_frame}")
++            coupler._fem_state_feature.copy_to(state)
++            pd_positions.append(position.view().reshape(-1, 3)[region].copy())
++            pd_velocities.append(velocity.view().reshape(-1, 3)[region].copy())
++            pd_expected_frame += 1
++
++        record_pd_state()
++        coupler._ipc_pd_state_callback = record_pd_state
+     ipc_proxy_visuals = None
+     ipc_actual_visuals = None
+     if not args.trajectory_preflight_only:
+@@ -7534,6 +7665,14 @@
+         "entities": {"table": str(table.uid), "robot": str(robot.uid), "cloth": str(cloth.uid)},
+     }
+     metrics_path = args.output.with_suffix(".json")
++    if args.pd_cloth_state_history is not None:
++        history = args.pd_cloth_state_history.resolve()
++        history.parent.mkdir(parents=True, exist_ok=True)
++        velocities = np.stack(pd_velocities)
++        np.savez_compressed(history, x=np.stack(pd_positions), v=velocities,
++                            delta_v=np.diff(velocities, axis=0), dt=physics_dt,
++                            settle_steps=args.settle_frames, substeps=args.substeps)
++        metrics["pd_cloth_state_history"] = str(history)
+     metrics_path.write_text(json.dumps(metrics, indent=2), encoding="utf-8")
+     print(f"Metrics: {metrics_path}")
+     if not args.no_record:
+--- a/dependencies/genesis-world-v0.0.28/genesis/engine/couplers/ipc_coupler/coupler.py
++++ b/dependencies/genesis-world-v0.0.28/genesis/engine/couplers/ipc_coupler/coupler.py
+@@ -528,8 +528,21 @@
+                             **strain_kwargs
+                         )
+ 
+-                    # Apply bending stiffness if specified
+-                    if entity.material.bending_stiffness is not None:
++                    proxy_asset = getattr(entity, "_ipc_pd_cloth_proxy_asset", None)
++                    if proxy_asset is not None:
++                        if not explicit_native or entity.material.bending_stiffness is None:
++                            raise ValueError("Progressive cloth requires native stretch, shear and bending parameters")
++                        if not hasattr(self, "_ipc_pd_empty"):
++                            from uipc.constitution import Empty
++
++                            self._ipc_pd_empty = Empty()
++                            self._ipc_constitution_tabular.insert(self._ipc_pd_empty)
++                        self._ipc_pd_empty.apply_to(
++                            mesh, mass_density=entity.material.rho, thickness=entity.material.thickness
++                        )
++                        mesh.meta().create("pd_cloth_proxy_asset", str(proxy_asset))
++                        mesh.meta().create("pd_cloth_proxy_kappa", float(entity.material.bending_stiffness))
++                    elif entity.material.bending_stiffness is not None:
+                         if self._ipc_dsb is None:
+                             self._ipc_dsb = DiscreteShellBending()
+                             self._ipc_constitution_tabular.insert(self._ipc_dsb)
+@@ -548,8 +561,10 @@
+                             'lambda':attribute_range(mesh.triangles().find('lambda')),
+                             'mu':attribute_range(mesh.triangles().find('mu')),
+                             'strain_rate':attribute_range(mesh.triangles().find('strain_rate'))}
+-                        if entity.material.bending_stiffness is not None:
++                        if entity.material.bending_stiffness is not None and proxy_asset is None:
+                             record['kappa']=attribute_range(mesh.edges().find('bending_stiffness'))
++                        if proxy_asset is not None:
++                            record["progressive_cloth_proxy_asset"] = str(proxy_asset)
+                         if not hasattr(self,'native_cloth_material_records'):
+                             self.native_cloth_material_records=[]
+                         self.native_cloth_material_records.append(record)
+@@ -571,13 +586,29 @@
+                 meta_attrs.create("solver_type", solver_type)
+                 meta_attrs.create("entity_idx", str(i_e))
+                 meta_attrs.create("env_idx", str(env_idx))
++                velocity_input = getattr(entity, "_ipc_pd_delta_velocity", None)
++                if velocity_input is not None:
++                    meta_attrs.create("pd_cloth_delta_velocity", str(velocity_input))
++                paper_state = getattr(entity, "_ipc_pd_paper_state", None)
++                if paper_state is not None:
++                    meta_attrs.create("pd_cloth_paper_eq5_state", str(paper_state))
++                velpro_velocity = getattr(entity, "_ipc_pd_velpro_velocity", None)
++                if velpro_velocity is not None:
++                    meta_attrs.create("pd_cloth_velpro_velocity", str(velpro_velocity))
++                    gs.logger.info(f"PD VelPro velocity input: {velpro_velocity}")
++                audit = getattr(entity, "_ipc_pd_audit", None)
++                if audit is not None:
++                    meta_attrs.create("pd_cloth_audit_frame", audit[0])
++                    meta_attrs.create("pd_cloth_audit_directory", audit[1])
+ 
+                 # ---- Create IPC object and geometry slot ----
+                 if entity not in self._fem_vertex_offsets:
+                     self._fem_vertex_offsets[entity] = [-1] * self.sim._B
+                 self._fem_vertex_offsets[entity][env_idx] = self._fem_vertex_count
+                 self._fem_vertex_count += entity.n_vertices
+-                fem_obj.geometries().create(mesh)
++                slot, _ = fem_obj.geometries().create(mesh)
++                if getattr(entity, "_ipc_pd_record_state", False):
++                    entity._ipc_pd_state_slot = slot
+                 if entity not in self._fem_constraint_active:
+                     n_vertices = len(entity.init_positions)
+                     init_positions = tensor_to_array(entity.init_positions).astype(np.float64, copy=True)
+@@ -1081,6 +1112,8 @@
+         # Step 3: IPC advance + retrieve (common)
+         self._ipc_world.advance()
+         self._ipc_world.retrieve()
++        if (record := getattr(self, "_ipc_pd_state_callback", None)) is not None:
++            record()
+ 
+         # Step 4: Retrieve states
+         self._retrieve_fem_states()
